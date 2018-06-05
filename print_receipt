@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+
+def default_operator():
+    import os, pwd
+    return pwd.getpwuid(os.getuid())[4]
+
+def default_timestamp():
+    from time import strftime, gmtime
+    return strftime("%d %b %Y %H:%M:%S", gmtime())
+
+def qr_code(data):
+    import qrcode, qrcode.image.svg
+    return qrcode.make(data, image_factory=qrcode.image.svg.SvgFragmentImage)
+
+def qr_code_to_svg(img):
+    import io
+    text = io.BytesIO()
+    img.save(text)
+    return text.getvalue().decode('utf-8')
+
+def qr_code_scale(img):
+    return 47.0 / float(img._img.attrib['width'][:-2])
+
+def group_id(gpk):
+    import hashlib
+    return hashlib.sha256(gpk.encode('ascii')).hexdigest()
+
+def make_receipt(group_id, group_size, operator, timestamp, qr_code_data):
+    import os
+    from cairosvg import svg2pdf
+    from jinja2 import Environment, FileSystemLoader
+
+    qr_code_raw = qr_code(qr_code_data)
+
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    env = Environment(loader=FileSystemLoader(this_dir),
+                      trim_blocks=True)
+
+    svg = env.get_template('issuer_receipt.svg.j2').render(
+        group_id = group_id,
+        group_size = group_size,
+        operator = operator,
+        timestamp = timestamp,
+        qr_code = qr_code_to_svg(qr_code_raw),
+        qr_code_scale = qr_code_scale(qr_code_raw)
+    )
+
+    with open('test.svg', 'w') as f:
+        f.write(svg)
+
+    return svg2pdf(svg, dpi=300)
+
+def print_receipt(printer, pdf):
+    from subprocess import Popen, PIPE, TimeoutExpired
+    p = Popen(["lpr",  "-P", printer], stdin=PIPE)
+    try:
+        outs, errs = p.communicate(input=pdf, timeout=15)
+    except TimeoutExpired:
+        proc.kill()
+        outs, errs = p.communicate()
+
+def save_receipt(filename, pdf):
+    with open(filename, 'wb') as f:
+        f.write(pdf)
+
+def main():
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(description='Print Xaptum issuer receipt')
+    parser.add_argument('-g', '--group_id', type=str, required=True, help="the group id just provisioned")
+    parser.add_argument('-s', '--group_size', type=int, required=True, help="the number of devices provisioned")
+    parser.add_argument('-o', '--operator', type=str, default=default_operator(), help="the user oding the provisioning")
+    parser.add_argument('-t', '--timestamp', type=str, default=default_timestamp(), help="when the provisioning occurred")
+    parser.add_argument('-p', '--printer', type=str, required=False, default='QL-800', help="name of printer to use")
+    parser.add_argument('-f', '--outfile', type=str, required=False, help="also save the receipt to this file")
+    args = parser.parse_args()
+
+    qr_code_data = sys.stdin.read()
+    receipt = make_receipt(args.group_id, args.group_size, args.operator, args.timestamp, qr_code_data)
+
+    if 'outfile' in args:
+        save_receipt(args.outfile, receipt)
+
+    print_receipt(args.printer, receipt)
+
+if __name__ == "__main__":
+    main()
